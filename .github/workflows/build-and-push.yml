@@ -1,0 +1,93 @@
+name: Build and push images
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Bootstrap publishes API and worker only; full also publishes the dashboard"
+        type: choice
+        options:
+          - full
+          - bootstrap
+        default: full
+        required: true
+
+jobs:
+  build-and-push:
+    name: Build and push to Azure Container Registry
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate frontend API URL configuration
+        if: ${{ github.event_name == 'push' || inputs.mode != 'bootstrap' }}
+        env:
+          VITE_API_URL: ${{ vars.VITE_API_URL }}
+        run: |
+          if [[ -z "$VITE_API_URL" ]]; then
+            echo "::error::Set the repository variable VITE_API_URL to the deployed API base URL before running this workflow."
+            exit 1
+          fi
+
+      - name: Sign in to Azure
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
+            }
+
+      - name: Log in to Azure Container Registry
+        run: az acr login --name ordacr38588
+
+      - name: Build API image
+        run: |
+          docker build \
+            --file api/Dockerfile \
+            --tag ordacr38588.azurecr.io/event-orders-api:${{ github.sha }} \
+            --tag ordacr38588.azurecr.io/event-orders-api:latest \
+            .
+
+      - name: Build worker image
+        run: |
+          docker build \
+            --file worker/Dockerfile \
+            --tag ordacr38588.azurecr.io/event-orders-worker:${{ github.sha }} \
+            --tag ordacr38588.azurecr.io/event-orders-worker:latest \
+            .
+
+      - name: Build dashboard image
+        if: ${{ github.event_name == 'push' || inputs.mode != 'bootstrap' }}
+        env:
+          VITE_API_URL: ${{ vars.VITE_API_URL }}
+        run: |
+          docker build \
+            --file frontend/Dockerfile \
+            --build-arg "VITE_API_URL=${VITE_API_URL}" \
+            --tag ordacr38588.azurecr.io/event-orders-dashboard:${{ github.sha }} \
+            --tag ordacr38588.azurecr.io/event-orders-dashboard:latest \
+            .
+
+      - name: Push API image tags
+        run: |
+          docker push ordacr38588.azurecr.io/event-orders-api:${{ github.sha }}
+          docker push ordacr38588.azurecr.io/event-orders-api:latest
+
+      - name: Push worker image tags
+        run: |
+          docker push ordacr38588.azurecr.io/event-orders-worker:${{ github.sha }}
+          docker push ordacr38588.azurecr.io/event-orders-worker:latest
+
+      - name: Push dashboard image tags
+        if: ${{ github.event_name == 'push' || inputs.mode != 'bootstrap' }}
+        run: |
+          docker push ordacr38588.azurecr.io/event-orders-dashboard:${{ github.sha }}
+          docker push ordacr38588.azurecr.io/event-orders-dashboard:latest
