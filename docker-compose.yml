@@ -1,0 +1,63 @@
+services:
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:3.33.0
+    command: azurite-queue --queueHost 0.0.0.0 --queuePort 10001 --location /data --debug /data/debug.log
+    ports:
+      - "10001:10001"
+    volumes:
+      - azurite-data:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "const s=require('net').connect(10001,'127.0.0.1');s.on('connect',()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1))"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    environment:
+      STORAGE_CONNECTION_STRING: ${STORAGE_CONNECTION_STRING}
+      QUEUE_NAME: ${QUEUE_NAME:-orders}
+      STATE_BACKEND: sqlite
+      DATABASE_PATH: /data/orders.db
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:8080}
+    ports:
+      - "8000:8000"
+    volumes:
+      - order-data:/data
+    depends_on:
+      azurite:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    environment:
+      STORAGE_CONNECTION_STRING: ${STORAGE_CONNECTION_STRING}
+      QUEUE_NAME: ${QUEUE_NAME:-orders}
+      STATE_BACKEND: sqlite
+      DATABASE_PATH: /data/orders.db
+      PROCESSING_SECONDS: ${PROCESSING_SECONDS:-5}
+      MAX_ATTEMPTS: ${MAX_ATTEMPTS:-5}
+    volumes:
+      - order-data:/data
+    depends_on:
+      azurite:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+
+volumes:
+  azurite-data:
+  order-data:
